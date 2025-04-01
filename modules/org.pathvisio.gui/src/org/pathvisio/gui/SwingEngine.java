@@ -36,6 +36,9 @@ import javax.swing.SwingWorker;
 import javax.swing.event.HyperlinkEvent;
 import javax.swing.event.HyperlinkListener;
 import javax.swing.filechooser.FileFilter;
+import javax.swing.*; // Added for JMenu, JMenuItem
+import java.awt.event.ActionEvent; // Added for ActionListener
+import java.awt.event.ActionListener; // Added for ActionListener
 
 import org.bridgedb.bio.Organism;
 import org.pathvisio.core.ApplicationEvent;
@@ -69,630 +72,696 @@ import org.pathvisio.gui.view.VPathwaySwing;
  */
 public class SwingEngine implements ApplicationEventListener, Pathway.StatusFlagListener, HyperlinkListener 
 {
-	private MainPanel mainPanel;
+    private MainPanel mainPanel;
+    private CommonActions actions;
+    private JFrame frame; // May be null (for applet...)
+    private Engine engine;
+    private GdbManager gdbManager = null;
+    private GitHubIntegration gitHubIntegration; // Field to manage GitHub API integration
 
-	private CommonActions actions;
-	private JFrame frame; // may be null (for applet...)
+    public Engine getEngine() { return engine; }
 
-	private Engine engine;
-	private GdbManager gdbManager = null;
-	//private final Compat compat;
+    public SwingEngine(Engine engine)
+    {
+        this.engine = engine;
+        gdbManager = new GdbManager();
+        actions = new CommonActions(this);
+        engine.addApplicationEventListener(this);
 
-	public Engine getEngine() { return engine; }
+        // Initialize GitHub integration using the token from config.properties
+        try {
+            gitHubIntegration = new GitHubIntegration();
+        } catch (Exception e) {
+            Logger.log.error("Failed to initialize GitHub integration", e);
+        }
+    }
 
-	public SwingEngine(Engine engine)
-	{
-		this.engine = engine;
-		gdbManager = new GdbManager();
-		actions = new CommonActions(this);
-		engine.addApplicationEventListener(this);
-		//compat = new Compat(this);
-		//engine.addApplicationEventListener(compat);
-	}
+    public GdbManager getGdbManager()
+    {
+        return gdbManager;
+    }
 
-	public GdbManager getGdbManager()
-	{
-		return gdbManager;
-	}
+    public CommonActions getActions() {
+        return actions;
+    }
 
-	public CommonActions getActions() {
-		return actions;
-	}
+    public MainPanel getApplicationPanel() {
+        return getApplicationPanel(false);
+    }
 
-	public MainPanel getApplicationPanel() {
-		return getApplicationPanel(false);
-	}
+    public MainPanel getApplicationPanel(boolean forceNew) {
+        if(forceNew || !hasApplicationPanel()) {
+            mainPanel = new MainPanel(this);
+        }
+        return mainPanel;
+    }
 
-	public MainPanel getApplicationPanel(boolean forceNew) {
-		if(forceNew || !hasApplicationPanel()) {
-			mainPanel = new MainPanel(this);
-		}
-		return mainPanel;
-	}
+    public void setApplicationPanel(MainPanel mp) {
+        if(mainPanel != null) {
+            Container parent = mainPanel.getParent();
+            if(parent != null) parent.remove(mainPanel);
+        }
+        mainPanel = mp;
+    }
 
-	public void setApplicationPanel(MainPanel mp) {
-		if(mainPanel != null) {
-			Container parent = mainPanel.getParent();
-			if(parent != null) parent.remove(mainPanel);
-		}
-		mainPanel = mp;
-	}
+    public boolean hasApplicationPanel() {
+        return mainPanel != null;
+    }
 
-	public boolean hasApplicationPanel() {
-		return mainPanel != null;
-	}
+    public void handleConverterException(String message, Component c, Throwable e) {
+        if (e.getMessage() != null &&
+                e.getMessage().contains("Cannot find the declaration of element 'Pathway'"))
+        {
+            JOptionPane.showMessageDialog(c,
+                    Utils.formatExceptionMsg(message) + "\n\n" +
+                    "The most likely cause for this error is that you are trying to open an old Gpml file. " +
+                    "Please note that the Gpml format has changed as of March 2007. " +
+                    "The standard pathway set can be re-downloaded from http://pathvisio.org " +
+                    "Non-standard pathways need to be recreated or upgraded. " +
+                    "Please contact the authors at " + Globals.DEVELOPER_EMAIL + " if you need help with this.\n"
+                    , "Error", JOptionPane.ERROR_MESSAGE);
+            Logger.log.error("Converter exception", e);
+        }
+        else
+        {
+            JOptionPane.showMessageDialog(c,
+                    Utils.formatExceptionMsg(message) + "\nSee error log for details\n" + e.getClass(), "Error", JOptionPane.ERROR_MESSAGE);
+            Logger.log.error("Converter exception", e);
+        }
+    }
 
-	public void handleConverterException(String message, Component c, Throwable e) {
-		if (e.getMessage() != null &&
-				e.getMessage().contains("Cannot find the declaration of element 'Pathway'"))
-		{
-			JOptionPane.showMessageDialog(c,
-					Utils.formatExceptionMsg(message) + "\n\n" +
-					"The most likely cause for this error is that you are trying to open an old Gpml file. " +
-					"Please note that the Gpml format has changed as of March 2007. " +
-					"The standard pathway set can be re-downloaded from http://pathvisio.org " +
-					"Non-standard pathways need to be recreated or upgraded. " +
-					"Please contact the authors at " + Globals.DEVELOPER_EMAIL + " if you need help with this.\n"
-					, "Error", JOptionPane.ERROR_MESSAGE);
-			Logger.log.error("Converter exception", e);
-		}
-		else
-		{
-			JOptionPane.showMessageDialog(c,
-					Utils.formatExceptionMsg(message) + "\nSee error log for details\n" + e.getClass(), "Error", JOptionPane.ERROR_MESSAGE);
-			Logger.log.error("Converter exception", e);
-		}
-	}
+    public void handleMalformedURLException(String message, Component c, Throwable e) {
+        if(e.getMessage() != null && e.getMessage().contains("no protocol:")) {
+            JOptionPane.showMessageDialog(c,
+                    Utils.formatExceptionMsg(message) + "\n\n" +
+                    "Please correct the specified hyperlink for this Label in the \"properties pane\" on the right.\n" +
+                    "(http://www.example.com)\n\n" +
+                    "Please contact the authors at " + Globals.DEVELOPER_EMAIL + " if you need help with this.\n"
+                    , "Error", JOptionPane.ERROR_MESSAGE);
+            Logger.log.error("MalformedURLException", e);
+        } else {
+            JOptionPane.showMessageDialog(c, Utils.formatExceptionMsg(message) + "\nSee error log for details\n" + e.getClass(), "Error", JOptionPane.ERROR_MESSAGE);
+            Logger.log.error("MalformedURLException", e);
+        }
+    }
+    
+    public VPathwayWrapper createWrapper() {
+         return new VPathwaySwing(getApplicationPanel().getScrollPane());
+    }
 
-	public void handleMalformedURLException(String message, Component c, Throwable e) {
-		if(e.getMessage() != null && e.getMessage().contains("no protocol:")) {
-			JOptionPane.showMessageDialog(c,
-					Utils.formatExceptionMsg(message) + "\n\n" +
-					"Please correct the specified hyperlink for this Label in the \"properties pane\" on the right.\n" +
-					"(http://www.example.com)\n\n" +
-					"Please contact the authors at " + Globals.DEVELOPER_EMAIL + " if you need help with this.\n"
-					, "Error", JOptionPane.ERROR_MESSAGE);
-			Logger.log.error("MalformedURLException", e);
-		} else {
-			JOptionPane.showMessageDialog(c, Utils.formatExceptionMsg(message) + "\nSee error log for details\n" + e.getClass(), "Error", JOptionPane.ERROR_MESSAGE);
-			Logger.log.error("MalformedURLException", e);
-		}
-	}
-	
-	public VPathwayWrapper createWrapper() {
-		 return new VPathwaySwing(getApplicationPanel().getScrollPane());
-	}
+    // TODO: Deprecate this method in future versions
+    public boolean processTask(ProgressKeeper pk, ProgressDialog d, SwingWorker<Boolean, Boolean> sw) {
+        sw.execute();
+        d.setVisible(true);
+        try {
+            return sw.get();
+        } catch (ExecutionException e)
+        {
+            handleConverterException("Exception during conversion", null, e.getCause());
+            return false;
+        } catch (InterruptedException e) {
+            handleConverterException("Conversion was cancelled or interrupted", null, e);
+            return false;
+        }
+    }
 
-	//TODO: deprecate
-	public boolean processTask(ProgressKeeper pk, ProgressDialog d, SwingWorker<Boolean, Boolean> sw) {
-		sw.execute();
-		d.setVisible(true);
-		try {
-			return sw.get();
-		} catch (ExecutionException e)
-		{
-			handleConverterException("Exception during conversion", null, e.getCause());
-			return false;
-		} catch (InterruptedException e) {
-			handleConverterException("Conversion was cancelled or interrupted", null, e);
-			return false;
-		}
-	}
+    public boolean openPathway(final URL url) {
+        final ProgressKeeper pk = new ProgressKeeper();
+        final ProgressDialog d = new ProgressDialog(JOptionPane.getFrameForComponent(getApplicationPanel()),
+                "", pk, false, true);
 
-	public boolean openPathway(final URL url) {
-		final ProgressKeeper pk = new ProgressKeeper();
-		final ProgressDialog d = new ProgressDialog(JOptionPane.getFrameForComponent(getApplicationPanel()),
-				"", pk, false, true);
+        SwingWorker<Boolean, Boolean> sw = new SwingWorker<Boolean, Boolean>() {
+            protected Boolean doInBackground() {
+                pk.setTaskName("Opening pathway");
+                try {
+                    engine.setWrapper(createWrapper());
+                    engine.openPathway(url);
+                    return true;
+                } catch(ConverterException e) {
+                    handleConverterException(e.getMessage(), null, e);
+                    return false;
+                } finally {
+                    pk.finished();
+                }
+            }
+        };
 
-		SwingWorker<Boolean, Boolean> sw = new SwingWorker<Boolean, Boolean>() {
-			protected Boolean doInBackground() {
-				pk.setTaskName("Opening pathway");
-				try {
-					engine.setWrapper (createWrapper());
-					engine.openPathway(url);
-					return true;
-				} catch(ConverterException e) {
-					handleConverterException(e.getMessage(), null, e);
-					return false;
-				} finally {
-					pk.finished();
-				}
-			}
-		};
+        return processTask(pk, d, sw);
+    }
 
-		return processTask(pk, d, sw);
-	}
+    public boolean openPathway(final File f)
+    {
+        final ProgressKeeper pk = new ProgressKeeper();
+        final ProgressDialog d = new ProgressDialog(JOptionPane.getFrameForComponent(getApplicationPanel()),
+                "", pk, false, true);
 
-	public boolean openPathway(final File f)
-	{
-		final ProgressKeeper pk = new ProgressKeeper();
-		final ProgressDialog d = new ProgressDialog(JOptionPane.getFrameForComponent(getApplicationPanel()),
-				"", pk, false, true);
+        engine.setWrapper(createWrapper());
+        SwingWorker<Boolean, Boolean> sw = new SwingWorker<Boolean, Boolean>() {
+            protected Boolean doInBackground() {
+                pk.setTaskName("Opening pathway");
+                try {
+                    engine.openPathway(f);
+                    return true;
+                } catch(ConverterException e) {
+                    handleConverterException(e.getMessage(), null, e);
+                    return false;
+                } finally {
+                    pk.finished();
+                }
+            }
+        };
 
-		engine.setWrapper (createWrapper());
-		SwingWorker<Boolean, Boolean> sw = new SwingWorker<Boolean, Boolean>() {
-			protected Boolean doInBackground() {
-				pk.setTaskName("Opening pathway");
-				try {
-					engine.openPathway(f);
-					return true;
-				} catch(ConverterException e) {
-					handleConverterException(e.getMessage(), null, e);
-					return false;
-				} finally {
-					pk.finished();
-				}
-			}
-		};
+        return processTask(pk, d, sw);
+    }
 
-		return processTask(pk, d, sw);
-	}
+    public boolean importPathway(final File f) {
+        final ProgressKeeper pk = new ProgressKeeper();
+        final ProgressDialog d = new ProgressDialog(JOptionPane.getFrameForComponent(getApplicationPanel()),
+                "", pk, false, true);
 
-	public boolean importPathway(final File f) {
-		final ProgressKeeper pk = new ProgressKeeper();
-		final ProgressDialog d = new ProgressDialog(JOptionPane.getFrameForComponent(getApplicationPanel()),
-				"", pk, false, true);
+        SwingWorker<Boolean, Boolean> sw = new SwingWorker<Boolean,Boolean>() {
+            protected Boolean doInBackground() {
+                pk.setTaskName("Importing pathway");
+                try {
+                    boolean editMode = engine.hasVPathway() ? engine.getActiveVPathway().isEditMode() : true;
+                    engine.setWrapper(createWrapper());
+                    engine.importPathway(f);
+                    engine.getActiveVPathway().setEditMode(editMode);
+                    return true;
+                } catch(ConverterException e) {
+                    handleConverterException(e.getMessage(), frame, e);
+                    return false;
+                } finally {
+                    pk.finished();
+                }
+            }
+        };
 
-		SwingWorker<Boolean, Boolean> sw = new SwingWorker<Boolean,Boolean>() {
-			protected Boolean doInBackground() {
-				pk.setTaskName("Importing pathway");
-				try {
-					boolean editMode = engine.hasVPathway() ? engine.getActiveVPathway().isEditMode() : true;
-					engine.setWrapper (createWrapper());
-					engine.importPathway(f);
-					engine.getActiveVPathway().setEditMode(editMode);
-					return true;
-				} catch(ConverterException e) {
-					handleConverterException(e.getMessage(), frame, e);
-					return false;
-				} finally {
-					pk.finished();
-				}
-			}
-		};
+        return processTask(pk, d, sw);
+    }
 
-	return processTask(pk, d, sw);
+    public void newPathway() {
+        engine.setWrapper(createWrapper());
+        engine.newPathway();
+        NewPathwayDialog dlg = new NewPathwayDialog(this, "Pathway attributes");
+        dlg.setVisible(true);
+    }
 
-	}
+    public boolean exportPathway() 
+    {
+        PathwayChooser pc = new PathwayChooser("Export", JFileChooser.SAVE_DIALOG, GlobalPreference.DIR_LAST_USED_EXPORT, engine.getPathwayExporters());
+        int status = pc.show();
+        
+        if(status == JFileChooser.APPROVE_OPTION) 
+        {
+            File f = pc.getSelectedFile();
 
-	public void newPathway() {
-		engine.setWrapper (createWrapper());
-		engine.newPathway();
-		NewPathwayDialog dlg = new NewPathwayDialog(this, "Pathway attributes");
-		dlg.setVisible(true);
-	}
+            PathwayFileFilter ff = (PathwayFileFilter)pc.getFileFilter();
+            if(!f.toString().toUpperCase().endsWith("." + ff.getDefaultExtension().toUpperCase())) {
+                f = new File(f.toString() + "." + ff.getDefaultExtension());
+            }
+            return exportPathway(f, ff.name);
+        }
+        return false;
+    }
+    
+    /**
+     * A wrapper around JFileChooser that has the right defaults and File Filters.
+     */
+    private class PathwayChooser 
+    {
+        private final JFileChooser jfc;
+        private final String taskName;
+        private final Preference dirPreference;
+        
+        public PathwayChooser(String taskName, int dialogType, Preference dirPreference, Set<? extends PathwayIO> set)
+        {
+            jfc = new JFileChooser();
+            this.taskName = taskName;
+            this.dirPreference = dirPreference;
+            createFileFilters(set);
+            jfc.setDialogTitle(taskName + " pathway");
+            jfc.setDialogType(dialogType);
+            jfc.setCurrentDirectory(PreferenceManager.getCurrent().getFile(dirPreference));
+        }
+        
+        /** Create a file chooser populated with file filters for the given pathway importers/exporters */
+        private void createFileFilters(Set<? extends PathwayIO> set)
+        {
+            jfc.setAcceptAllFileFilterUsed(false);
+                    
+            SortedSet<PathwayIO> exporters = new TreeSet<PathwayIO>(
+                    new Comparator<PathwayIO>() {
+                        public int compare(PathwayIO o1, PathwayIO o2) {
+                            return o1.getName().compareTo(o2.getName());
+                        }
+                    }
+            );
+            exporters.addAll(set);
 
-	public boolean exportPathway() 
-	{
-		PathwayChooser pc = new PathwayChooser("Export", JFileChooser.SAVE_DIALOG, GlobalPreference.DIR_LAST_USED_EXPORT, engine.getPathwayExporters());
-		int status = pc.show();
-		
-		if(status == JFileChooser.APPROVE_OPTION) 
-		{
-			File f = pc.getSelectedFile();
+            FileFilter selectedFilter = null;
+            for(PathwayIO exp : exporters) {
+                FileFilter ff = new PathwayFileFilter(exp);
+                jfc.addChoosableFileFilter(ff);
+                if(exp instanceof GpmlFormat) {
+                    selectedFilter = ff;
+                }
+            }
+            if(selectedFilter != null) jfc.setFileFilter(selectedFilter);
+        }
 
-			PathwayFileFilter ff = (PathwayFileFilter)pc.getFileFilter();
-			if(!f.toString().toUpperCase().endsWith("." + ff.getDefaultExtension().toUpperCase())) {
-				f = new File(f.toString() + "." + ff.getDefaultExtension());
-			}
-//			return exportPathway(f);
-			return exportPathway(f,ff.name);
+        public FileFilter getFileFilter()
+        {
+            return jfc.getFileFilter();
+        }
 
-		}
-		return false;
-	}
-	
-	/**
-	 * A wrapper around JFileChooser that has the right defaults and File Filters.
-	 */
-	private class PathwayChooser 
-	{
-		private final JFileChooser jfc;
-		private final String taskName;
-		private final Preference dirPreference;
-		
-		public PathwayChooser(String taskName, int dialogType, Preference dirPreference, Set<? extends PathwayIO> set)
-		{
-			jfc = new JFileChooser();
-			this.taskName = taskName;
-			this.dirPreference = dirPreference;
-			createFileFilters(set);
-			jfc.setDialogTitle(taskName + " pathway");
-			jfc.setDialogType(dialogType);
-			jfc.setCurrentDirectory(PreferenceManager.getCurrent().getFile(dirPreference));
-		}
-		
-		/** create a file chooser populated with file filters for the given pathway importers / exporters */
-		private void createFileFilters(Set<? extends PathwayIO> set)
-		{
-			jfc.setAcceptAllFileFilterUsed(false);
-					
-			SortedSet<PathwayIO> exporters = new TreeSet<PathwayIO>(
-					new Comparator<PathwayIO>() {
-						public int compare(PathwayIO o1, PathwayIO o2) {
-							return o1.getName().compareTo(o2.getName());
-						}
-					}
-			);
-			exporters.addAll(set);
+        public int show ()    
+        {
+            int status = jfc.showDialog(getApplicationPanel(), taskName);
+            if(status == JFileChooser.APPROVE_OPTION) 
+            {
+                PreferenceManager.getCurrent().setFile(dirPreference, jfc.getCurrentDirectory());
+            }
+            return status;
+        }
+            
+        public File getSelectedFile()
+        {
+            return jfc.getSelectedFile();
+        }
+    }
+    
+    public boolean exportPathway(final File f, final String exporterName) {
+        if(mayOverwrite(f)) {
+            final ProgressKeeper pk = new ProgressKeeper();
+            final ProgressDialog d = new ProgressDialog(JOptionPane.getFrameForComponent(getApplicationPanel()),
+                    "", pk, false, true);
 
-			FileFilter selectedFilter = null;
-			for(PathwayIO exp : exporters) {
-				FileFilter ff = new PathwayFileFilter(exp);
-				jfc.addChoosableFileFilter(ff);
-				if(exp instanceof GpmlFormat) {
-					selectedFilter = ff;
-				}
-			}
-			if(selectedFilter != null) jfc.setFileFilter(selectedFilter);
-		}
+            // Create a clone so we can safely act on it in a worker thread
+            final Pathway clone = engine.getActivePathway().clone();
 
-		public FileFilter getFileFilter()
-		{
-			return jfc.getFileFilter();
-		}
+            SwingWorker<Boolean, Boolean> sw = new SwingWorker<Boolean, Boolean>() 
+            {
+                private List<String> warnings;
+                
+                @Override
+                protected Boolean doInBackground() {
+                    try {
+                        pk.setTaskName("Exporting pathway");
+                        warnings = engine.exportPathway(f, clone, exporterName);
+                        return true;
+                    } catch(Exception e) {
+                        handleConverterException(e.getMessage(), frame, e);
+                        return false;
+                    } finally {
+                        pk.finished();
+                    }
+                }
+                
+                @Override
+                public void done()
+                {
+                    if (warnings != null && warnings.size() > 0)
+                    {
+                        OkCancelDialog dlg = new OkCancelDialog(frame, "Conversion warnings", getFrame(), true);
+                        JTextArea area = new JTextArea(60, 30);
+                        for (String w : warnings)
+                            area.append(w + "\n");
+                        dlg.setDialogComponent(area);
+                        dlg.pack();
+                        dlg.setVisible(true);
+                    }
+                }
+            };
 
-		public int show ()	
-		{
-			int status = jfc.showDialog(getApplicationPanel(), taskName);
-			if(status == JFileChooser.APPROVE_OPTION) 
-			{
-				PreferenceManager.getCurrent().setFile(dirPreference, jfc.getCurrentDirectory());
-			}
-			return status;
-		}
-			
-		public File getSelectedFile()
-		{
-			return jfc.getSelectedFile();
-		}
-	}
-	
-	public boolean exportPathway(final File f, final String exporterName) {
-		if(mayOverwrite(f)) {
-			final ProgressKeeper pk = new ProgressKeeper();
-			final ProgressDialog d = new ProgressDialog(JOptionPane.getFrameForComponent(getApplicationPanel()),
-					"", pk, false, true);
+            return processTask(pk, d, sw);
+        }
+        return false;
+    }
+    
+    public boolean exportPathway(final File f) {
+        if(mayOverwrite(f)) {
+            final ProgressKeeper pk = new ProgressKeeper();
+            final ProgressDialog d = new ProgressDialog(JOptionPane.getFrameForComponent(getApplicationPanel()),
+                    "", pk, false, true);
 
-			// create a clone so we can safely act on it in a worker thread.
-			final Pathway clone = engine.getActivePathway().clone();
+            // Create a clone so we can safely act on it in a worker thread
+            final Pathway clone = engine.getActivePathway().clone();
 
-			SwingWorker<Boolean, Boolean> sw = new SwingWorker<Boolean, Boolean>() 
-			{
-				private List<String> warnings;
-				
-				@Override
-				protected Boolean doInBackground() {
-					try {
-						pk.setTaskName("Exporting pathway");
-						warnings = engine.exportPathway(f, clone,exporterName);
-						return true;
-					} catch(Exception e) {
-						handleConverterException(e.getMessage(), frame, e);
-						return false;
-					} finally {
-						pk.finished();
-					}
-				}
-				
-				@Override
-				public void done()
-				{
-					if (warnings != null && warnings.size() > 0)
-					{
-						OkCancelDialog dlg = new OkCancelDialog(frame, "Conversion warnings", getFrame(), true);
-						JTextArea area = new JTextArea(60, 30);
-						for (String w : warnings)
-							area.append(w + "\n");
-						dlg.setDialogComponent(area);
-						dlg.pack();
-						dlg.setVisible(true);
-					}
-				}
-			};
+            SwingWorker<Boolean, Boolean> sw = new SwingWorker<Boolean, Boolean>() 
+            {
+                private List<String> warnings;
+                
+                @Override
+                protected Boolean doInBackground() {
+                    try {
+                        pk.setTaskName("Exporting pathway");
+                        warnings = engine.exportPathway(f, clone);
+                        return true;
+                    } catch(ConverterException e) {
+                        handleConverterException(e.getMessage(), frame, e);
+                        return false;
+                    } finally {
+                        pk.finished();
+                    }
+                }
+                
+                @Override
+                public void done()
+                {
+                    if (warnings != null && warnings.size() > 0)
+                    {
+                        OkCancelDialog dlg = new OkCancelDialog(frame, "Conversion warnings", getFrame(), true);
+                        JTextArea area = new JTextArea(60, 30);
+                        for (String w : warnings)
+                            area.append(w + "\n");
+                        dlg.setDialogComponent(area);
+                        dlg.pack();
+                        dlg.setVisible(true);
+                    }
+                }
+            };
 
-			return processTask(pk, d, sw);
-		}
-		return false;
-	}
-	
-	public boolean exportPathway(final File f) {
-		if(mayOverwrite(f)) {
-			final ProgressKeeper pk = new ProgressKeeper();
-			final ProgressDialog d = new ProgressDialog(JOptionPane.getFrameForComponent(getApplicationPanel()),
-					"", pk, false, true);
+            return processTask(pk, d, sw);
+        }
+        return false;
+    }
 
-			// create a clone so we can safely act on it in a worker thread.
-			final Pathway clone = engine.getActivePathway().clone();
+    public boolean importPathway() 
+    {    
+        PathwayChooser pc = new PathwayChooser("Import", JFileChooser.OPEN_DIALOG, GlobalPreference.DIR_LAST_USED_IMPORT, engine.getPathwayImporters());
+        int status = pc.show();
+        
+        if(status == JFileChooser.APPROVE_OPTION) 
+        {
+            File f = pc.getSelectedFile();
+            return importPathway(f);
+        }
+        return false;
+    }
 
-			SwingWorker<Boolean, Boolean> sw = new SwingWorker<Boolean, Boolean>() 
-			{
-				private List<String> warnings;
-				
-				@Override
-				protected Boolean doInBackground() {
-					try {
-						pk.setTaskName("Exporting pathway");
-						warnings = engine.exportPathway(f, clone);
-						return true;
-					} catch(ConverterException e) {
-						handleConverterException(e.getMessage(), frame, e);
-						return false;
-					} finally {
-						pk.finished();
-					}
-				}
-				
-				@Override
-				public void done()
-				{
-					if (warnings != null && warnings.size() > 0)
-					{
-						OkCancelDialog dlg = new OkCancelDialog(frame, "Conversion warnings", getFrame(), true);
-						JTextArea area = new JTextArea(60, 30);
-						for (String w : warnings)
-							area.append(w + "\n");
-						dlg.setDialogComponent(area);
-						dlg.pack();
-						dlg.setVisible(true);
-					}
-				}
-			};
+    private final Set<PathwayIO> GPML_FORMAT_ONLY = Utils.setOf((PathwayIO)new GpmlFormat());
+    
+    /**
+     * Opens a file chooser dialog, and opens the chosen pathway.
+     * @return true if a pathway was opened, false if the operation was cancelled
+     */
+    public boolean openPathway()
+    {
+        PathwayChooser pc = new PathwayChooser("Open", JFileChooser.OPEN_DIALOG, GlobalPreference.DIR_LAST_USED_OPEN, GPML_FORMAT_ONLY);
+        int status = pc.show(); 
+        
+        if(status == JFileChooser.APPROVE_OPTION) 
+        {
+            File f = pc.getSelectedFile();
+            return openPathway(f);
+        }
+        return false;
+    }
 
-			return processTask(pk, d, sw);
-		}
-		return false;
-	}
+    public boolean mayOverwrite(File f) {
+        boolean allow = true;
+        if(f.exists()) {
+            int status = JOptionPane.showConfirmDialog(frame, "File " + f.getName() + " already exists, overwrite?",
+                    "File already exists", JOptionPane.YES_NO_OPTION);
+            allow = status == JOptionPane.YES_OPTION;
+        }
+        return allow;
+    }
 
-	public boolean importPathway() 
-	{	
-		PathwayChooser pc = new PathwayChooser("Import", JFileChooser.OPEN_DIALOG, GlobalPreference.DIR_LAST_USED_IMPORT, engine.getPathwayImporters());
-		int status = pc.show();
-		
-		if(status == JFileChooser.APPROVE_OPTION) 
-		{
-			File f = pc.getSelectedFile();
-			return importPathway(f);
-		}
-		return false;
-	}
+    public boolean savePathwayAs() 
+    {
+        PathwayChooser pc = new PathwayChooser("Save", JFileChooser.SAVE_DIALOG, GlobalPreference.DIR_LAST_USED_SAVE, GPML_FORMAT_ONLY);
+        int status = pc.show(); 
+        
+        if(status == JFileChooser.APPROVE_OPTION) 
+        {
+            File toFile = pc.getSelectedFile();
+            String fn = toFile.toString();
+            if(!fn.toLowerCase().endsWith(Engine.PATHWAY_FILE_EXTENSION)) {
+                toFile = new File(fn + "." + Engine.PATHWAY_FILE_EXTENSION);
+            }
+            try {
+                if(mayOverwrite(toFile)) {
+                    engine.savePathway(toFile);
+                    return true;
+                }
+            } catch(ConverterException e) {
+                handleConverterException(e.getMessage(), null, e);
+            }
+        }
+        return false;
+    }
 
-	private final Set<PathwayIO> GPML_FORMAT_ONLY = Utils.setOf((PathwayIO)new GpmlFormat());
-	
-	/**
-	 * Opens a file chooser dialog, and opens the chosen pathway.
-	 * @return true if a pathway was openend, false if the operation was
-	 * cancelled
-	 */
-	public boolean openPathway()
-	{
-		PathwayChooser pc = new PathwayChooser("Open", JFileChooser.OPEN_DIALOG, GlobalPreference.DIR_LAST_USED_OPEN, GPML_FORMAT_ONLY);
-		int status = pc.show (); 
-		
-		if(status == JFileChooser.APPROVE_OPTION) 
-		{
-			File f = pc.getSelectedFile();
-			return openPathway(f);
-		}
-		return false;
-	}
+    public boolean savePathway()
+    {
+        Pathway pathway = engine.getActivePathway();
 
-	public boolean mayOverwrite(File f) {
-		boolean allow = true;
-		if(f.exists()) {
-			int status = JOptionPane.showConfirmDialog(frame, "File " + f.getName() + " already exists, overwrite?",
-					"File already exists", JOptionPane.YES_NO_OPTION);
-			allow = status == JOptionPane.YES_OPTION;
-		}
-		return allow;
-	}
-
-	public boolean savePathwayAs() 
-	{
-		PathwayChooser pc = new PathwayChooser("Save", JFileChooser.SAVE_DIALOG, GlobalPreference.DIR_LAST_USED_SAVE, GPML_FORMAT_ONLY);
-		int status = pc.show (); 
-		
-		if(status == JFileChooser.APPROVE_OPTION) 
-		{
-			File toFile = pc.getSelectedFile();
-			String fn = toFile.toString();
-			if(!fn.toLowerCase().endsWith(Engine.PATHWAY_FILE_EXTENSION)) {
-				toFile = new File(fn + "." + Engine.PATHWAY_FILE_EXTENSION);
-			}
-			try {
-				if(mayOverwrite(toFile)) {
-					engine.savePathway(toFile);
-					return true;
-				}
-			} catch(ConverterException e) {
-				handleConverterException(e.getMessage(), null, e);
-			}
-		}
-		return false;
-	}
-
-	public boolean savePathway()
-	{
-		Pathway pathway = engine.getActivePathway();
-
-		boolean result = true;
+        boolean result = true;
 
         // Overwrite the existing xml file.
-		// If the target file is read-only, let the user select a new pathway
-		if (pathway.getSourceFile() != null && pathway.getSourceFile().canWrite())
-		{
-			try {
-				engine.savePathway(pathway.getSourceFile());
-			} catch (ConverterException e) {
-				handleConverterException(e.getMessage(), null, e);
-			}
-		}
-		else {
-			result = savePathwayAs();
-		}
+        // If the target file is read-only, let the user select a new pathway
+        if (pathway.getSourceFile() != null && pathway.getSourceFile().canWrite())
+        {
+            try {
+                engine.savePathway(pathway.getSourceFile());
+            } catch (ConverterException e) {
+                handleConverterException(e.getMessage(), null, e);
+            }
+        }
+        else {
+            result = savePathwayAs();
+        }
 
-		return result;
-	}
+        return result;
+    }
 
-	/**
-	 * Call this when the user is about to perform an
-	 * action that could lead to discarding the current pathway.
-	 * (For example when creating a new pathway)
-	 *
-	 * Checks if there are any unsaved changes, and
-	 * asks the user if they want to save those changes.
-	 *
-	 * @return true if the user allows discarding the pathway, possibly after saving.
-	 */
-	public boolean canDiscardPathway()
-	{
-		Pathway pathway = engine.getActivePathway();
-        // checking not necessary if there is no pathway or if pathway is not changed.
+    /**
+     * Call this when the user is about to perform an action that could lead to
+     * discarding the current pathway (e.g., when creating a new pathway).
+     *
+     * Checks if there are any unsaved changes, and asks the user if they want to save those changes.
+     *
+     * @return true if the user allows discarding the pathway, possibly after saving.
+     */
+    public boolean canDiscardPathway()
+    {
+        Pathway pathway = engine.getActivePathway();
+        // Checking not necessary if there is no pathway or if pathway is not changed
+        if (pathway == null || !pathway.hasChanged()) return true;
+        int result = JOptionPane.showConfirmDialog
+            (frame, "Save changes?",
+                    "Your pathway has changed. Do you want to save?",
+                    JOptionPane.YES_NO_CANCEL_OPTION,
+                    JOptionPane.QUESTION_MESSAGE);
+        if (result == JOptionPane.CANCEL_OPTION) // Cancel
+        {
+            return false;
+        }
+        else if (result == JOptionPane.YES_OPTION) // Yes
+        {
+            // Return false if save is cancelled
+            return (savePathway());
+        }
+        // Yes or no
+        return true;
+    }
 
-		if (pathway == null || !pathway.hasChanged()) return true;
-		int result = JOptionPane.showConfirmDialog
-			(frame, "Save changes?",
-					"Your pathway has changed. Do you want to save?",
-					JOptionPane.YES_NO_CANCEL_OPTION,
-					JOptionPane.QUESTION_MESSAGE);
-		if (result == JOptionPane.CANCEL_OPTION) // cancel
-		{
-			return false;
-		}
-		else if (result == JOptionPane.YES_OPTION) // yes
-		{
-			// return false if save is cancelled.
-			return (savePathway());
-		}
-		// yes or no
-		return true;
-	}
+    public void applicationEvent(ApplicationEvent e)
+    {
+        switch (e.getType()) {
+        case PATHWAY_OPENED:
+        case PATHWAY_NEW:
+            updateTitle();
+            engine.getActivePathway().addStatusFlagListener(SwingEngine.this);
+            break;
+        }
+    }
 
-	public void applicationEvent(ApplicationEvent e)
-	{
-		switch (e.getType()) {
-		case PATHWAY_OPENED:
-		case PATHWAY_NEW:
-			updateTitle();
-			engine.getActivePathway().addStatusFlagListener(SwingEngine.this);
-			break;
-		}
-	}
+    public void updateTitle()
+    {
+        if (frame != null)
+        {
+            if (engine.getActivePathway() == null)
+            {
+                frame.setTitle(engine.getApplicationName());
+            }
+            else
+            {
+                boolean changeStatus = engine.getActivePathway().hasChanged();
+                // Get filename, or (New Pathway) if current pathway hasn't been opened yet
+                String fname = (engine.getActivePathway().getSourceFile() == null) ? "(New Pathway)" :
+                    engine.getActivePathway().getSourceFile().getName();
+                frame.setTitle(
+                    (changeStatus ? "*" : "") + fname + " - " +
+                    engine.getApplicationName()
+                    );
+            }
+        }
+    }
 
-	public void updateTitle()
-	{
-		if (frame != null)
-		{
-			if (engine.getActivePathway() == null)
-			{
-				frame.setTitle(engine.getApplicationName());
-			}
-			else
-			{
-				boolean changeStatus = engine.getActivePathway().hasChanged();
-				// get filename, or (New Pathway) if current pathway hasn't been opened yet
-				String fname = (engine.getActivePathway().getSourceFile() == null) ? "(New Pathway)" :
-					engine.getActivePathway().getSourceFile().getName();
-				frame.setTitle(
-					(changeStatus ? "*" : "") + fname + " - " +
-					engine.getApplicationName()
-					);
-			}
-		}
-	}
+    public void statusFlagChanged(StatusFlagEvent e)
+    {
+        updateTitle();
+    }
 
-	public void statusFlagChanged(StatusFlagEvent e)
-	{
-		updateTitle();
-	}
+    // Method to save the current pathway to GitHub
+    private void saveToGitHub() {
+        // Check if a pathway is loaded
+        if (!engine.hasPathway()) {
+            JOptionPane.showMessageDialog(frame, "No pathway loaded!", "Error", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
 
-	public void setFrame(JFrame frame)
-	{
-		this.frame = frame;
-	}
+        try {
+            // Export the pathway to a GPML string
+            Pathway pathway = engine.getActivePathway();
+            String gpmlContent = GpmlFormat.writeToString(pathway);
 
-	public JFrame getFrame()
-	{
-		return frame;
-	}
+            // Generate a unique file name based on the pathway title
+            String fileName = "pathways/" + (pathway.getMappInfo().getMapInfoName() != null ?
+                    pathway.getMappInfo().getMapInfoName().replaceAll("[^a-zA-Z0-9]", "_") : "pathway") + ".gpml";
 
-	private Browser browser = null;
+            // Upload the file to GitHub
+            gitHubIntegration.saveToGitHub(
+                "wikipathways/wikipathways", // Target repository
+                fileName,                    // File path in the repository
+                gpmlContent,                 // File content (GPML string)
+                "Add new pathway via PathVisio" // Commit message
+            );
 
-	/**
-	 * Set the browser launcher that will be used to open urls in the
-	 * system's default web browser.
-	 */
-	public void setUrlBrowser(Browser b) {
-		this.browser = b;
-	}
+            // Show success message
+            JOptionPane.showMessageDialog(frame, "Successfully saved to GitHub!", "Success", JOptionPane.INFORMATION_MESSAGE);
+        } catch (Exception ex) {
+            // Show error message if upload fails
+            JOptionPane.showMessageDialog(frame, "Error: " + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+            Logger.log.error("Failed to save to GitHub", ex);
+        }
+    }
 
-	/**
-	 * Opens an URL in the system's default browser if a browser is set
-	 * @see #setUrlBrowser
-	 * @throws UnsupportedOperationException when there is no browser set.
-	 */
-	public void openUrl(URL url) throws UnsupportedOperationException {
-		if(browser != null) browser.openUrl(url);
-	}
+    // Add "Save to GitHub" option to the File menu
+    public void addGitHubMenuItem() {
+        if (frame != null) {
+            // Get or create the menu bar
+            JMenuBar menuBar = frame.getJMenuBar();
+            if (menuBar == null) {
+                menuBar = new JMenuBar();
+                frame.setJMenuBar(menuBar);
+            }
 
-	/**
-	 * Simple interface to allow different browser launcher implementations.
-	 * Note: Java 1.6 provides an easy method to open an url in the default system browser
-	 * using {@link Desktop#browse(java.net.URI)}, we should use this in the future.
-	 * @author thomas
-	 */
-	public interface Browser {
-		public void openUrl(URL url);
-	}
+            // Find or create the "File" menu
+            JMenu fileMenu = null;
+            for (int i = 0; i < menuBar.getMenuCount(); i++) {
+                if (menuBar.getMenu(i).getText().equals("File")) {
+                    fileMenu = menuBar.getMenu(i);
+                    break;
+                }
+            }
+            if (fileMenu == null) {
+                fileMenu = new JMenu("File");
+                menuBar.add(fileMenu);
+            }
 
-	private boolean disposed = false;
-	/**
-	 * free all resources (such as listeners) held by this class.
-	 * Owners of this class must explicitly dispose of it to clean up.
-	 */
-	public void dispose()
-	{
-		assert (!disposed);
-		engine.removeApplicationEventListener(this);
-		//engine.removeApplicationEventListener(compat);
-		disposed = true;
-	}
+            // Add "Save to GitHub" menu item
+            JMenuItem saveToGitHubItem = new JMenuItem("Save to GitHub");
+            saveToGitHubItem.addActionListener(new ActionListener() {
+                @Override
+                public void actionPerformed(ActionEvent e) {
+                    saveToGitHub();
+                }
+            });
+            fileMenu.add(saveToGitHubItem);
+        }
+    }
 
-	/**
-	 * Returns the organism set in the active pathway.
-	 * May return null if there is no current organism set
-	 */
-	public Organism getCurrentOrganism()
-	{
-		String organism = getEngine().getActivePathway().getMappInfo().getOrganism();
-		return Organism.fromLatinName(organism);
-	}
+    // Modified setFrame to add the GitHub menu item
+    public void setFrame(JFrame frame)
+    {
+        this.frame = frame;
+        addGitHubMenuItem(); // Add the menu item when the frame is set
+        updateTitle();
+    }
 
-	public void hyperlinkUpdate(HyperlinkEvent e)
-	{
-		if(e.getEventType() == HyperlinkEvent.EventType.ACTIVATED) {
-			try {
-				openUrl(e.getURL());
-			} catch(UnsupportedOperationException ex) {
-				Logger.log.error("Unable to open URL", ex);
-				JOptionPane.showMessageDialog(
-						mainPanel,
-						"No browser launcher specified",
-						"Unable to open link",
-						JOptionPane.ERROR_MESSAGE
-				);
-			}
-		}
-		else
-		{
-			//TODO: show URL in status bar when mousing over
-		}
-	}
+    public JFrame getFrame()
+    {
+        return frame;
+    }
 
-	private PopupDialogHandler popupDlgHandler = new PopupDialogHandler(this);
-	
-	public PopupDialogHandler getPopupDialogHandler()
-	{
-		return popupDlgHandler;
-	}
+    private Browser browser = null;
+
+    /**
+     * Set the browser launcher that will be used to open URLs in the
+     * system's default web browser.
+     */
+    public void setUrlBrowser(Browser b) {
+        this.browser = b;
+    }
+
+    /**
+     * Opens a URL in the system's default browser if a browser is set.
+     * @throws UnsupportedOperationException when there is no browser set.
+     */
+    public void openUrl(URL url) throws UnsupportedOperationException {
+        if(browser != null) browser.openUrl(url);
+    }
+
+    /**
+     * Simple interface to allow different browser launcher implementations.
+     * Note: Java 1.6 provides an easy method to open a URL in the default system browser
+     * using {@link Desktop#browse(java.net.URI)}, we should use this in the future.
+     */
+    public interface Browser {
+        public void openUrl(URL url);
+    }
+
+    private boolean disposed = false;
+
+    /**
+     * Free all resources (such as listeners) held by this class.
+     * Owners of this class must explicitly dispose of it to clean up.
+     */
+    public void dispose()
+    {
+        assert (!disposed);
+        engine.removeApplicationEventListener(this);
+        disposed = true;
+    }
+
+    /**
+     * Returns the organism set in the active pathway.
+     * May return null if there is no current organism set.
+     */
+    public Organism getCurrentOrganism()
+    {
+        String organism = getEngine().getActivePathway().getMappInfo().getOrganism();
+        return Organism.fromLatinName(organism);
+    }
+
+    public void hyperlinkUpdate(HyperlinkEvent e)
+    {
+        if(e.getEventType() == HyperlinkEvent.EventType.ACTIVATED) {
+            try {
+                openUrl(e.getURL());
+            } catch(UnsupportedOperationException ex) {
+                Logger.log.error("Unable to open URL", ex);
+                JOptionPane.showMessageDialog(
+                        mainPanel,
+                        "No browser launcher specified",
+                        "Unable to open link",
+                        JOptionPane.ERROR_MESSAGE
+                );
+            }
+        }
+        else
+        {
+            // TODO: Show URL in status bar when mousing over
+        }
+    }
+
+    private PopupDialogHandler popupDlgHandler = new PopupDialogHandler(this);
+    
+    public PopupDialogHandler getPopupDialogHandler()
+    {
+        return popupDlgHandler;
+    }
 }
